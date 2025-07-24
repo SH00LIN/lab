@@ -1,79 +1,89 @@
 from flask import Flask, request, jsonify
+import tempfile
 import xml.etree.ElementTree as ET
 import yaml
 import os
-import tempfile
 
 app = Flask(__name__)
 
-def parse_jmx(file_path):
-    tree = ET.parse(file_path)
-    root = tree.getroot()
+# Utility: Extract headers from sibling hashTree of HTTPSamplerProxy
+def extract_headers(sampler_elem, parent_hash_tree):
+    headers = {}
+    if parent_hash_tree is not None:
+        siblings = list(parent_hash_tree)
+        sampler_index = siblings.index(sampler_elem)
 
-    namespace = ''  # No namespace used
+        # Look for next sibling hashTree
+        if sampler_index + 1 < len(siblings):
+            sampler_hash_tree = siblings[sampler_index + 1]
+            header_manager = sampler_hash_tree.find(".//HeaderManager")
+            if header_manager is not None:
+                collection = header_manager.find("collectionProp[@name='HeaderManager.headers']")
+                if collection is not None:
+                    for header_elem in collection.findall("elementProp"):
+                        name_elem = header_elem.find("stringProp[@name='Header.name']")
+                        value_elem = header_elem.find("stringProp[@name='Header.value']")
+                        if name_elem is not None and value_elem is not None:
+                            headers[name_elem.text] = value_elem.text
+    return headers
 
-    api_tests = []
+# Utility: Extract payload from sampler itself
+def extract_payload(sampler):
+    payload = ""
+    arguments = sampler.find(".//elementProp[@name='HTTPsampler.Arguments']")
+    if arguments is not None:
+        for arg_val in arguments.findall(".//stringProp[@name='Argument.value']"):
+            if arg_val.text:
+                payload += arg_val.text.strip()
+    return payload
 
-    for sampler in root.iter('HTTPSamplerProxy'):
-        api_name = sampler.attrib.get('testname', 'UnknownAPI')
-        method = sampler.findtext(".//stringProp[@name='HTTPSampler.method']", default='GET')
-        domain = sampler.findtext(".//stringProp[@name='HTTPSampler.domain']", default='')
-        path = sampler.findtext(".//stringProp[@name='HTTPSampler.path']", default='')
-        url = f"https://{domain}{path}" if domain else path
-        payload = sampler.findtext(".//stringProp[@name='Argument.value']", default='{}').replace('&quot;', '"').strip()
-
-        # Headers
-        headers = {}
-        header_manager = sampler.find("./hashTree/HeaderManager/collectionProp")
-        if header_manager is not None:
-            for element in header_manager.findall("elementProp"):
-                name = element.findtext("stringProp[@name='Header.name']")
-                value = element.findtext("stringProp[@name='Header.value']")
-                if name and value:
-                    headers[name] = value
-
-        # Repeat
-        repeat = 1
-        parent = sampler.getparent() if hasattr(sampler, "getparent") else None
-        loop_controller = sampler.find(".//intProp[@name='LoopController.loops']")
-        if loop_controller is not None:
-            try:
-                repeat = int(loop_controller.text)
-            except:
-                pass
-
-        api_tests.append({
-            'api_name': api_name,
-            'headers': headers,
-            'method': method,
-            'payload': payload,
-            'status_code': 200,
-            'url': url,
-            'repeat': repeat
-        })
-
-    return {'api_tests': api_tests}
-
-@app.route('/convert', methods=['POST'])
-def convert_jmx():
+@app.route('/parse-jmx', methods=['POST'])
+def parse_jmx():
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
 
     file = request.files['file']
-    if not file.filename.endswith('.jmx'):
-        return jsonify({'error': 'Only .jmx files are allowed'}), 400
 
-    file_path = tempfile.maketemp(suffix='.jmx')
-    file.save(file_path)
+    # Save the uploaded file to a temp location
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.jmx') as temp_file:
+        file.save(temp_file.name)
+        temp_path = temp_file.name
 
     try:
-        data = parse_jmx(file_path)
-        yaml_output = yaml.dump(data, sort_keys=False)
-        return yaml_output, 200, {'Content-Type': 'text/yaml'}
+        tree = ET.parse(temp_path)
+        root = tree.getroot()
+
+        test_plan = []
+
+        for parent in root.iter():
+            for sampler in parent.findall("HTTPSamplerProxy"):
+                method = sampler.findtext("stringProp[@name='HTTPSampler.method']")
+                url = sampler.findtext("stringProp[@name='HTTPSampler.path']")
+                payload = extract_payload(sampler)
+                headers = extract_headers(sampler, parent)
+
+                transaction = {
+                    "request": {
+                        "method": method,
+                        "url": url,
+                        "headers": headers or {},
+                        "body": payload or ""
+                    }
+                }
+
+                test_plan.append(transaction)
+
+        os.remove(temp_path)
+
+        # Return YAML response
+        yaml_output = yaml.dump(test_plan, sort_keys=False)
+        return app.response_class(yaml_output, content_type='text/yaml')
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     finally:
-        os.remove(file_path)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 if __name__ == '__main__':
     app.run(debug=True)
