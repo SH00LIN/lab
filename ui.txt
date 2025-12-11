@@ -1,0 +1,188 @@
+import React, { useState, useRef } from "react";
+
+// Minimal Stub Onboarder UI matching your exact requirements. // - Path // - Method // - Req Headers: upload JSON file // - Req Body: upload JSON file // - Response code // - Response string (short text) // - Response headers: upload JSON file // - Response body: JSON textarea (for now only JSON supported) // - Match type dropdown (pathOnly | custom | exact) // - If match type == custom: parse uploaded JSONs and let user select one body key as the single required match param; header matches optional // - Submit: validate, then show the saved mapping JSON in the UI and the full URL: <domain>/<mappingId>/<path>
+
+export default function StubOnboarderMini() { const [domain, setDomain] = useState("http://localhost/stub"); const [mappingId, setMappingId] = useState(""); const [path, setPath] = useState("/api/example"); const [method, setMethod] = useState("GET"); const [matchType, setMatchType] = useState("pathOnly");
+
+const [reqHeadersJson, setReqHeadersJson] = useState(null); const [reqBodyJson, setReqBodyJson] = useState(null); const [respHeadersJson, setRespHeadersJson] = useState(null); const [respBodyText, setRespBodyText] = useState('{ "ok": true }');
+
+const [respCode, setRespCode] = useState(200); const [respString, setRespString] = useState("");
+
+// For custom match selection const [selectedBodyKey, setSelectedBodyKey] = useState(""); const [selectedHeaderKey, setSelectedHeaderKey] = useState("");
+
+const [savedMapping, setSavedMapping] = useState(null); const [error, setError] = useState(null);
+
+const fileRef = useRef(null);
+
+function genMappingId() { // generate 6-digit numeric id const id = Math.floor(100000 + Math.random() * 900000).toString(); setMappingId(id); }
+
+async function handleUploadFile(evt, setter) { setError(null); const f = evt.target.files && evt.target.files[0]; if (!f) return; try { const txt = await f.text(); const parsed = JSON.parse(txt); setter(parsed); } catch (e) { setter(null); setError('Uploaded file must contain valid JSON.'); } }
+
+function topLevelKeys(obj) { if (!obj || typeof obj !== 'object') return []; return Object.keys(obj); }
+
+function validateBeforeSubmit() { setError(null); if (!mappingId) return setError('Generate or provide a mappingId.'); if (!path) return setError('Path is required'); if (!respBodyText) return setError('Response body is required'); try { JSON.parse(respBodyText); } catch(e) { return setError('Response body must be valid JSON'); }
+
+if (matchType === 'custom') {
+  // require body upload and one selected body key
+  if (!reqBodyJson) return setError('Custom match requires an uploaded request body JSON');
+  if (!selectedBodyKey) return setError('Select a single body key to be the match parameter');
+}
+return true;
+
+}
+
+function buildMappingObject() { const mapping = { mappingId: mappingId, priority: 50, requestSpec: { method: method, path: path, matchStrategy: matchType }, responseSpec: { status: Number(respCode) || 200, headers: respHeadersJson || { 'Content-Type': 'application/json' }, bodyTemplate: JSON.parse(respBodyText), delayMs: 0, consumeOnce: false }, metadata: { createdAt: new Date().toISOString() } };
+
+if (reqHeadersJson) {
+  mapping.requestSpec.headers = reqHeadersJson;
+}
+if (reqBodyJson) {
+  mapping.requestSpec.bodySpec = { type: 'json', value: reqBodyJson };
+}
+
+if (matchType === 'custom') {
+  // enforce exact single body match parameter in shape: bodyMatch jsonPath -> we'll store a simple key-based path
+  mapping.requestSpec.bodyMatch = { type: 'jsonPath', path: `$.${selectedBodyKey}`, value: reqBodyJson[selectedBodyKey] };
+  if (selectedHeaderKey) {
+    mapping.requestSpec.headerMatch = [{ name: selectedHeaderKey, value: reqHeadersJson ? reqHeadersJson[selectedHeaderKey] : null }];
+  }
+}
+
+return mapping;
+
+}
+
+function onSubmit(e) { e.preventDefault(); setError(null); const ok = validateBeforeSubmit(); if (ok !== true) return;
+
+const mapping = buildMappingObject();
+// for now we only show it in UI instead of saving to backend
+setSavedMapping(mapping);
+
+}
+
+return ( <div className="p-6 max-w-3xl mx-auto bg-white rounded shadow"> <h1 className="text-xl font-semibold mb-4">Stub Onboarder (Minimal)</h1>
+
+<form onSubmit={onSubmit}>
+    <div className="grid grid-cols-2 gap-3">
+      <div>
+        <label className="block text-sm font-medium">Domain (base)</label>
+        <input className="w-full border rounded px-2 py-1" value={domain} onChange={(e)=>setDomain(e.target.value)} />
+      </div>
+      <div>
+        <label className="block text-sm font-medium">MappingId</label>
+        <div className="flex gap-2">
+          <input value={mappingId} onChange={(e)=>setMappingId(e.target.value)} className="flex-1 border rounded px-2 py-1" placeholder="6-digit mapping id" />
+          <button type="button" onClick={genMappingId} className="px-3 bg-gray-200 rounded">Generate</button>
+        </div>
+      </div>
+    </div>
+
+    <div className="mt-3">
+      <label className="block text-sm font-medium">Path</label>
+      <input className="w-full border rounded px-2 py-1 font-mono" value={path} onChange={(e)=>setPath(e.target.value)} />
+      <div className="text-xs text-gray-500 mt-1">Use <code>#name#</code> placeholders for single-segment captures.</div>
+    </div>
+
+    <div className="mt-3 grid grid-cols-2 gap-3">
+      <div>
+        <label className="block text-sm font-medium">Method</label>
+        <select value={method} onChange={(e)=>setMethod(e.target.value)} className="w-full border rounded px-2 py-1">
+          <option>GET</option>
+          <option>POST</option>
+          <option>PUT</option>
+          <option>PATCH</option>
+          <option>DELETE</option>
+        </select>
+      </div>
+      <div>
+        <label className="block text-sm font-medium">Match type</label>
+        <select value={matchType} onChange={(e)=>{ setMatchType(e.target.value); setSelectedBodyKey(''); setSelectedHeaderKey(''); }} className="w-full border rounded px-2 py-1">
+          <option value="pathOnly">pathOnly</option>
+          <option value="custom">custom</option>
+          <option value="exact">exact</option>
+        </select>
+      </div>
+    </div>
+
+    {/* Uploads */}
+    <div className="mt-4 grid grid-cols-3 gap-3">
+      <label className="block text-sm">Req Headers (JSON upload)</label>
+      <div className="col-span-2 flex gap-2">
+        <input type="file" accept="application/json" onChange={(e)=>handleUploadFile(e, setReqHeadersJson)} />
+        <div className="text-xs text-gray-500">{reqHeadersJson ? `Loaded keys: ${topLevelKeys(reqHeadersJson).join(', ')}` : 'No file'}</div>
+      </div>
+
+      <label className="block text-sm">Req Body (JSON upload)</label>
+      <div className="col-span-2 flex gap-2">
+        <input type="file" accept="application/json" onChange={(e)=>handleUploadFile(e, setReqBodyJson)} />
+        <div className="text-xs text-gray-500">{reqBodyJson ? `Loaded keys: ${topLevelKeys(reqBodyJson).join(', ')}` : 'No file'}</div>
+      </div>
+
+      <label className="block text-sm">Response Headers (JSON upload)</label>
+      <div className="col-span-2 flex gap-2">
+        <input type="file" accept="application/json" onChange={(e)=>handleUploadFile(e, setRespHeadersJson)} />
+        <div className="text-xs text-gray-500">{respHeadersJson ? `Loaded keys: ${topLevelKeys(respHeadersJson).join(', ')}` : 'No file'}</div>
+      </div>
+    </div>
+
+    {/* When matchType == custom, show selection UI */}
+    {matchType === 'custom' && (
+      <div className="mt-4 p-3 border rounded bg-gray-50">
+        <div className="text-sm font-medium mb-2">Custom Match — select the single body key to match</div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs">Body key (single)</label>
+            <select value={selectedBodyKey} onChange={(e)=>setSelectedBodyKey(e.target.value)} className="w-full border rounded px-2 py-1">
+              <option value="">-- choose a key from uploaded req body --</option>
+              {topLevelKeys(reqBodyJson).map(k=> <option key={k} value={k}>{k}</option>)}
+            </select>
+            <div className="text-xs text-gray-500 mt-1">This key and its value will be used as the required body match parameter.</div>
+          </div>
+
+          <div>
+            <label className="text-xs">Optional header match</label>
+            <select value={selectedHeaderKey} onChange={(e)=>setSelectedHeaderKey(e.target.value)} className="w-full border rounded px-2 py-1">
+              <option value="">-- optional header key from uploaded headers --</option>
+              {topLevelKeys(reqHeadersJson).map(k=> <option key={k} value={k}>{k}</option>)}
+            </select>
+            <div className="text-xs text-gray-500 mt-1">If selected, presence (and value if provided) will be required.</div>
+          </div>
+        </div>
+      </div>
+    )}
+
+    <div className="mt-4 grid grid-cols-2 gap-3">
+      <div>
+        <label className="block text-sm font-medium">Response code</label>
+        <input type="number" value={respCode} onChange={(e)=>setRespCode(e.target.value)} className="w-full border rounded px-2 py-1" />
+      </div>
+      <div>
+        <label className="block text-sm font-medium">Response string (short)</label>
+        <input value={respString} onChange={(e)=>setRespString(e.target.value)} className="w-full border rounded px-2 py-1" />
+      </div>
+    </div>
+
+    <div className="mt-4">
+      <label className="block text-sm font-medium">Response body (JSON)</label>
+      <textarea rows={6} value={respBodyText} onChange={(e)=>setRespBodyText(e.target.value)} className="w-full border rounded px-2 py-1 font-mono" />
+    </div>
+
+    <div className="mt-4 flex gap-3">
+      <button className="px-4 py-2 bg-blue-600 text-white rounded" type="submit">Submit (show in UI)</button>
+      <button type="button" className="px-4 py-2 border rounded" onClick={()=>{ setSavedMapping(null); setError(null); }}>Clear</button>
+    </div>
+
+    {error && <div className="mt-3 p-3 bg-red-50 text-red-800 rounded">{error}</div>}
+  </form>
+
+  {savedMapping && (
+    <div className="mt-6 p-4 border rounded bg-gray-50">
+      <h2 className="font-medium">Saved mapping (preview)</h2>
+      <div className="mt-2 text-sm">URL: <span className="font-mono">{domain}/{savedMapping.mappingId}{savedMapping.requestSpec.path}</span></div>
+      <pre className="mt-3 bg-white p-3 rounded overflow-auto text-xs" style={{maxHeight: '40vh'}}>{JSON.stringify(savedMapping, null, 2)}</pre>
+    </div>
+  )}
+
+</div>
+
+); }
